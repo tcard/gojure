@@ -145,6 +145,18 @@ func newPath(shift uint, node vectorNode) vectorNode {
 	return ret
 }
 
+func (v *Vector) String() string {
+	s := "["
+	for i := 0; i < v.Count(); i++ {
+		if i > 0 {
+			s += " "
+		}
+		s += fmt.Sprint(v.Nth(i))
+	}
+	s += "]"
+	return s
+}
+
 func (v *Vector) StringRaw() string {
 	var f func(interface{}, int) string
 	f = func(x interface{}, lvl int) string {

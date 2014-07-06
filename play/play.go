@@ -3,13 +3,12 @@ package main
 import (
 	"fmt"
 
-	"github.com/tcard/gojure/persistent"
+	"github.com/tcard/gojure/reader"
 )
 
 func main() {
-	v := persistent.NewVector()
-	for i := 0; i < 40; i++ {
-		v = v.Conj(fmt.Sprintf("%s %d", "hola", i))
-	}
-	fmt.Println(v.StringRaw())
+	r := reader.FromString("a 3 (1 [] [3 (4 a b ca/def)-123])")
+	fmt.Println(r.Read())
+	fmt.Println(r.Read())
+	fmt.Println(r.Read())
 }
