@@ -85,7 +85,7 @@ func (r GojureReader) readAtom() (interface{}, error) {
 	}
 	r.UnreadByte()
 	switch {
-	case unicode.IsDigit(rune(c)) || c == '-' || c == '+':
+	case unicode.IsDigit(rune(c)):
 		return r.readInt()
 	case c == ':':
 		panic("not yet implemented")
@@ -120,7 +120,7 @@ func (r GojureReader) readInt() (int, error) {
 
 func symbolChar(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
-		c == '*' || c == '+' || c == '!' || c == '-' || c == '_' || c == '?' || c == '/'
+		c == '*' || c == '+' || c == '!' || c == '-' || c == '_' || c == '?' || c == '/' || c == '='
 }
 
 func (r GojureReader) readSymbol() (Symbol, error) {
