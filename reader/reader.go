@@ -76,6 +76,8 @@ func (r GojureReader) readAtom() (interface{}, error) {
 		return r.readInt()
 	case c == ':':
 		panic("not yet implemented")
+	case c == '"':
+		return r.readString()
 	default:
 		sym, err := r.readSymbol()
 		if err != nil {
@@ -117,6 +119,35 @@ func (r GojureReader) readInt() (int, error) {
 		r.UnreadByte()
 	}
 	return strconv.Atoi(string(bys))
+}
+
+func (r GojureReader) readString() (string, error) {
+	bys := []byte{}
+	quo, err := r.ReadByte()
+	if err != nil {
+		return "", err
+	}
+	if quo != '"' {
+		return "", errors.New("not a string.")
+	}
+	escaping := false
+	c, err := r.ReadByte()
+	for err == nil && (escaping || c != '"') {
+		if c == '\n' {
+			bys = append(bys, '\\', 'n')
+		} else {
+			bys = append(bys, c)
+		}
+		escaping = false
+		if c == '\\' && !escaping {
+			escaping = true
+		}
+		c, err = r.ReadByte()
+	}
+	if err != nil {
+		return "", err
+	}
+	return string(bys), nil
 }
 
 func symbolChar(c byte) bool {

@@ -162,6 +162,9 @@ func Compile(r io.Reader) (*ast.File, error) {
 					"github.com/tcard/gojure/lang"
 				)
 
+				var _ *persistent.List
+				var _ lang.Symbol
+
 				type SymTable struct {
 					parent *SymTable
 					m      map[string]interface{}
@@ -245,6 +248,8 @@ func CompileForm(form interface{}, env *SymExprsTable) (ast.Expr, *SymExprsTable
 		}
 	case nil:
 		return &ast.Ident{Name: "nil", Obj: &ast.Object{}}, env, nil
+	case string:
+		return &ast.BasicLit{Kind: token.STRING, Value: `"` + vform + `"`}, env, nil
 	case lang.Symbol:
 		return compileSymbol(vform, env)
 	case *persistent.List:

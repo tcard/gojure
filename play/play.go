@@ -12,7 +12,9 @@ import (
 func main() {
 	a, _ := compiler.CompileString(`
 
-(println (quote [1 (+ 2 3) 3]))
+(println "ab
+
+\tc")
 
 `)
 	_ = a
