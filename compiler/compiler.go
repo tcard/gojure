@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tcard/gojure/lang"
 	"github.com/tcard/gojure/persistent"
 	"github.com/tcard/gojure/reader"
 )
@@ -157,6 +158,8 @@ func Compile(r io.Reader) (*ast.File, error) {
 
 				import (
 					"fmt"
+					"github.com/tcard/gojure/persistent"
+					"github.com/tcard/gojure/lang"
 				)
 
 				type SymTable struct {
@@ -190,7 +193,7 @@ func Compile(r io.Reader) (*ast.File, error) {
 
 	var expr ast.Expr
 	form, err := gr.Read()
-	for err == nil && form != nil {
+	for err == nil {
 		expr, env, err = CompileForm(form, env)
 		if err != nil {
 			break
@@ -234,11 +237,19 @@ func CompileForm(form interface{}, env *SymExprsTable) (ast.Expr, *SymExprsTable
 	switch vform := form.(type) {
 	case int:
 		return &ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(vform)}, env, nil
-	case reader.Symbol:
+	case bool:
+		if vform {
+			return &ast.Ident{Name: "true", Obj: &ast.Object{}}, env, nil
+		} else {
+			return &ast.Ident{Name: "false", Obj: &ast.Object{}}, env, nil
+		}
+	case nil:
+		return &ast.Ident{Name: "nil", Obj: &ast.Object{}}, env, nil
+	case lang.Symbol:
 		return compileSymbol(vform, env)
 	case *persistent.List:
 		opform := vform.First()
-		sym, isSym := opform.(reader.Symbol)
+		sym, isSym := opform.(lang.Symbol)
 
 		if isSym {
 			switch sym.Name {
@@ -248,15 +259,23 @@ func CompileForm(form interface{}, env *SymExprsTable) (ast.Expr, *SymExprsTable
 				return compileFn(vform.Next(), env)
 			case "if":
 				return compileIf(vform.Next(), env)
+			case "quote":
+				if vform.Next() == nil {
+					return CompileForm(nil, env)
+				}
+				q, err := quote(vform.Next().First())
+				return q, env, err
 			}
 		}
 
 		return compileCall(vform, env)
+	case *persistent.Vector:
+		return compileVector(vform, env, false)
 	}
 	return nil, env, nil
 }
 
-func compileSymbol(sym reader.Symbol, env *SymExprsTable) (ast.Expr, *SymExprsTable, error) {
+func compileSymbol(sym lang.Symbol, env *SymExprsTable) (ast.Expr, *SymExprsTable, error) {
 	if _, ok := env.Get(sym.Name); !ok {
 		return nil, env, errors.New("Undefined symbol: " + sym.String())
 	}
@@ -269,7 +288,7 @@ func compileSymbol(sym reader.Symbol, env *SymExprsTable) (ast.Expr, *SymExprsTa
 }
 
 func compileDef(form *persistent.List, env *SymExprsTable) (ast.Expr, *SymExprsTable, error) {
-	ident := form.First().(reader.Symbol).Name
+	ident := form.First().(lang.Symbol).Name
 	env.m[ident] = nil // &ast.BasicLit{Kind: token.STRING, Value: "`placeholder`"}
 	def, env, err := CompileForm(form.Next().First(), env)
 	if err != nil {
@@ -299,7 +318,7 @@ func compileFn(form *persistent.List, env *SymExprsTable) (ast.Expr, *SymExprsTa
 	bodyf := form.Next().First()
 	fnEnv := &SymExprsTable{parent: env, m: map[string]ast.Expr{}}
 	for i := 0; i < args.Count(); i++ {
-		fnEnv.m[args.Nth(i).(reader.Symbol).Name] = &ast.IndexExpr{
+		fnEnv.m[args.Nth(i).(lang.Symbol).Name] = &ast.IndexExpr{
 			X:     &ast.Ident{Name: "xs", Obj: &ast.Object{}},
 			Index: &ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)},
 		}
@@ -404,7 +423,10 @@ func compileIf(form *persistent.List, env *SymExprsTable) (ast.Expr, *SymExprsTa
 				&ast.AssignStmt{
 					Lhs: []ast.Expr{&ast.Ident{Name: "ifCond", Obj: &ast.Object{}}},
 					Tok: token.DEFINE,
-					Rhs: []ast.Expr{cond},
+					Rhs: []ast.Expr{&ast.CallExpr{
+						Fun:  ifaceAST,
+						Args: []ast.Expr{cond},
+					}},
 				},
 				&ast.AssignStmt{
 					Lhs: []ast.Expr{
@@ -453,4 +475,69 @@ func compileIf(form *persistent.List, env *SymExprsTable) (ast.Expr, *SymExprsTa
 				&ast.ReturnStmt{Results: []ast.Expr{&ast.Ident{Name: "ifRet", Obj: &ast.Object{}}}},
 			}}},
 	}, env, nil
+}
+
+func compileVector(v *persistent.Vector, env *SymExprsTable, quoting bool) (ast.Expr, *SymExprsTable, error) {
+	ret := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X:   &ast.Ident{Name: "persistent", Obj: &ast.Object{}},
+			Sel: &ast.Ident{Name: "NewVector", Obj: &ast.Object{}},
+		},
+		Args: []ast.Expr{},
+	}
+	var item ast.Expr
+	var err error
+	for i := 0; i < v.Count(); i++ {
+		if quoting {
+			item, err = quote(v.Nth(i))
+			if err != nil {
+				return nil, env, err
+			}
+		} else {
+			item, env, err = CompileForm(v.Nth(i), env)
+			if err != nil {
+				return nil, env, err
+			}
+		}
+		ret.Args = append(ret.Args, item)
+	}
+	return ret, env, err
+}
+
+func quote(thingy interface{}) (ast.Expr, error) {
+	switch v := thingy.(type) {
+	case lang.Symbol:
+		return &ast.CompositeLit{
+			Type: &ast.SelectorExpr{
+				X:   &ast.Ident{Name: "lang", Obj: &ast.Object{}},
+				Sel: &ast.Ident{Name: "Symbol", Obj: &ast.Object{}},
+			},
+			Elts: []ast.Expr{
+				&ast.BasicLit{Kind: token.STRING, Value: `"` + v.NS + `"`},
+				&ast.BasicLit{Kind: token.STRING, Value: `"` + v.Name + `"`},
+			},
+		}, nil
+	case *persistent.List:
+		l := &ast.CallExpr{
+			Fun: &ast.SelectorExpr{
+				X:   &ast.Ident{Name: "persistent", Obj: &ast.Object{}},
+				Sel: &ast.Ident{Name: "NewList", Obj: &ast.Object{}},
+			},
+			Args: []ast.Expr{},
+		}
+		for v != nil {
+			item, err := quote(v.First())
+			if err != nil {
+				return nil, err
+			}
+			l.Args = append(l.Args, item)
+			v = v.Next()
+		}
+		return l, nil
+	case *persistent.Vector:
+		e, _, err := compileVector(v, nil, true)
+		return e, err
+	}
+	v, _, err := CompileForm(thingy, nil)
+	return v, err
 }

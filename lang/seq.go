@@ -1,4 +1,4 @@
-package seq
+package lang
 
 import (
 	"fmt"

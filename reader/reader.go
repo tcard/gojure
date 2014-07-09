@@ -8,22 +8,9 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/tcard/gojure/lang"
 	"github.com/tcard/gojure/persistent"
 )
-
-type Keyword string
-
-type Symbol struct {
-	NS   string
-	Name string
-}
-
-func (s Symbol) String() string {
-	if s.NS != "" {
-		return s.NS + "/" + s.Name
-	}
-	return s.Name
-}
 
 func From(r io.Reader) GojureReader {
 	bufr, ok := r.(*bufio.Reader)
@@ -90,7 +77,21 @@ func (r GojureReader) readAtom() (interface{}, error) {
 	case c == ':':
 		panic("not yet implemented")
 	default:
-		return r.readSymbol()
+		sym, err := r.readSymbol()
+		if err != nil {
+			return nil, err
+		}
+		if sym.NS == "" {
+			switch sym.Name {
+			case "true":
+				return true, nil
+			case "false":
+				return false, nil
+			case "nil":
+				return nil, nil
+			}
+		}
+		return sym, nil
 	}
 }
 
@@ -123,8 +124,8 @@ func symbolChar(c byte) bool {
 		c == '*' || c == '+' || c == '!' || c == '-' || c == '_' || c == '?' || c == '/' || c == '='
 }
 
-func (r GojureReader) readSymbol() (Symbol, error) {
-	ret := Symbol{}
+func (r GojureReader) readSymbol() (lang.Symbol, error) {
+	ret := lang.Symbol{}
 	c, err := r.ReadByte()
 	if err != nil {
 		return ret, err
