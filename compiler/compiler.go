@@ -3,6 +3,7 @@ package compiler
 import (
 	"errors"
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/token"
 	"io"
@@ -15,21 +16,79 @@ import (
 )
 
 type SymExprsTable struct {
-	parent *SymExprsTable
-	m      map[string]ast.Expr
+	parent  *SymExprsTable
+	m       map[string]ast.Expr
+	imports map[string][]string
 }
 
-func (st SymExprsTable) Get(s string) (interface{}, bool) {
+func (st SymExprsTable) Get(s string, ns string) (ast.Expr, bool) {
+	if st.imports != nil && ns != "" {
+		if _, ok := st.imports[ns]; ok {
+			e, _ := parser.ParseExpr(`
+				func() interface{} {
+					v := reflect.ValueOf(` + ns + `.` + s + `)
+					if v.Kind() == reflect.Func {
+						return func(xs ...interface{}) interface{} {
+							invals := []reflect.Value{}
+							for _, x := range xs {
+								invals = append(invals, reflect.ValueOf(x))
+							}
+							refvals := v.Call(invals)
+							vals := []interface{}{}
+							for _, rv := range refvals {
+								vals = append(vals, rv)
+							}
+							if len(vals) == 0 {
+								return vals[0]
+							} else if len(vals) > 0 {
+								return persistent.NewVector(vals...)
+							} else {
+								return nil
+							}
+						}
+					} else {
+						return ` + ns + `.` + s + `
+					}
+				}()`)
+			return e, true
+		}
+	}
 	v, ok := st.m[s]
 	if ok {
 		return v, true
 	} else if !ok && st.parent != nil {
-		return st.parent.Get(s)
+		return st.parent.Get(s, ns)
 	}
 	return nil, false
 }
 
+func (st SymExprsTable) Import(pkgName string, alias string) error {
+	pkg, err := build.Import(pkgName, ".", build.AllowBinary)
+	if err != nil {
+		return err
+	}
+	tbl := &st
+	for tbl.parent != nil {
+		tbl = tbl.parent
+	}
+	if alias == "" {
+		alias = pkg.Name
+	}
+	if alias != "." && alias != "_" && len(tbl.imports[alias]) > 0 {
+		tbl.imports[alias][0] = pkgName
+	} else {
+		tbl.imports[alias] = append(tbl.imports[alias], pkgName)
+	}
+	return nil
+}
+
 var Symbols = &SymExprsTable{
+	imports: map[string][]string{
+		"fmt":        []string{"fmt"},
+		"reflect":    []string{"reflect"},
+		"persistent": []string{"github.com/tcard/gojure/persistent"},
+		"lang":       []string{"github.com/tcard/gojure/lang"},
+	},
 	m: map[string]ast.Expr{
 		"+": func() ast.Expr {
 			e, _ := parser.ParseExpr(`
@@ -130,9 +189,15 @@ var fnAST = &ast.FuncType{
 func Compile(r io.Reader) (*ast.File, error) {
 	gr := reader.From(r)
 
-	env := &SymExprsTable{m: map[string]ast.Expr{}}
+	env := &SymExprsTable{
+		imports: make(map[string][]string),
+		m:       map[string]ast.Expr{},
+	}
 	for k, v := range Symbols.m {
 		env.m[k] = v
+	}
+	for k, v := range Symbols.imports {
+		env.imports[k] = v
 	}
 
 	main := &ast.FuncDecl{
@@ -152,33 +217,6 @@ func Compile(r io.Reader) (*ast.File, error) {
 			Value: v,
 		})
 	}
-
-	file, _ := parser.ParseFile(&token.FileSet{}, "", `
-				package main
-
-				import (
-					"fmt"
-					"github.com/tcard/gojure/persistent"
-					"github.com/tcard/gojure/lang"
-				)
-
-				var _ *persistent.List
-				var _ lang.Symbol
-
-				type SymTable struct {
-					parent *SymTable
-					m      map[string]interface{}
-				}
-
-				func (st SymTable) Get(k string) interface{} {
-					v, ok := st.m[k]
-					if ok {
-						return v
-					} else if !ok && st.parent != nil {
-						return st.parent.Get(k)
-					}
-					panic("Undefined symbol "+k)
-				}`, 0)
 
 	for k, v := range env.m {
 		main.Body.List = append(main.Body.List,
@@ -202,13 +240,49 @@ func Compile(r io.Reader) (*ast.File, error) {
 			break
 		}
 		if expr != nil {
-			main.Body.List = append(main.Body.List, &ast.ExprStmt{expr})
+			main.Body.List = append(main.Body.List, &ast.DeclStmt{&ast.GenDecl{
+				Tok: token.VAR,
+				Specs: []ast.Spec{&ast.ValueSpec{
+					Names:  []*ast.Ident{{Name: "_", Obj: &ast.Object{}}},
+					Values: []ast.Expr{expr.(ast.Expr)}}}}})
 		}
 		form, err = gr.Read()
 	}
 	if err != nil && err != io.EOF {
 		return nil, err
 	}
+
+	imports := "import ("
+	for name, paths := range env.imports {
+		for _, path := range paths {
+			imports += "\n" + name + " \"" + path + "\""
+		}
+	}
+	imports += ")"
+
+	file, _ := parser.ParseFile(&token.FileSet{}, "", `
+		package main
+
+		`+imports+`
+
+		var _ *persistent.List
+		var _ lang.Symbol
+		var _ reflect.Type
+
+		type SymTable struct {
+			parent *SymTable
+			m      map[string]interface{}
+		}
+
+		func (st SymTable) Get(k string) interface{} {
+			v, ok := st.m[k]
+			if ok {
+				return v
+			} else if !ok && st.parent != nil {
+				return st.parent.Get(k)
+			}
+			panic("Undefined symbol "+k)
+		}`, 0)
 
 	file.Decls = append(file.Decls,
 		&ast.GenDecl{
@@ -247,7 +321,10 @@ func CompileForm(form interface{}, env *SymExprsTable) (ast.Expr, *SymExprsTable
 			return &ast.Ident{Name: "false", Obj: &ast.Object{}}, env, nil
 		}
 	case nil:
-		return &ast.Ident{Name: "nil", Obj: &ast.Object{}}, env, nil
+		return &ast.CallExpr{
+			Fun:  ifaceAST,
+			Args: []ast.Expr{&ast.Ident{Name: "nil", Obj: &ast.Object{}}},
+		}, env, nil
 	case string:
 		return &ast.BasicLit{Kind: token.STRING, Value: `"` + vform + `"`}, env, nil
 	case lang.Symbol:
@@ -270,6 +347,19 @@ func CompileForm(form interface{}, env *SymExprsTable) (ast.Expr, *SymExprsTable
 				}
 				q, err := quote(vform.Next().First())
 				return q, env, err
+			case "import":
+				if vform.Next() == nil {
+					return CompileForm(nil, env)
+				}
+				alias := ""
+				if vform.Next().Next() != nil {
+					alias = vform.Next().Next().First().(lang.Symbol).Name
+				}
+				err := env.Import(vform.Next().First().(string), alias)
+				if err != nil {
+					return nil, env, err
+				}
+				return CompileForm(nil, env)
 			}
 		}
 
@@ -281,8 +371,10 @@ func CompileForm(form interface{}, env *SymExprsTable) (ast.Expr, *SymExprsTable
 }
 
 func compileSymbol(sym lang.Symbol, env *SymExprsTable) (ast.Expr, *SymExprsTable, error) {
-	if _, ok := env.Get(sym.Name); !ok {
+	if e, ok := env.Get(sym.Name, sym.NS); !ok {
 		return nil, env, errors.New("Undefined symbol: " + sym.String())
+	} else if sym.NS != "" {
+		return e, env, nil
 	}
 	return &ast.CallExpr{
 		Fun: &ast.SelectorExpr{
@@ -388,13 +480,15 @@ func compileCall(form *persistent.List, env *SymExprsTable) (ast.Expr, *SymExprs
 		}
 		args = append(args, arg)
 	}
-	return &ast.CallExpr{
+	ret := &ast.CallExpr{
 		Args: args,
-		Fun: &ast.TypeAssertExpr{
-			X:    op,
-			Type: fnAST,
-		},
-	}, env, nil
+	}
+	ret.Fun = &ast.TypeAssertExpr{
+		X:    op,
+		Type: fnAST,
+	}
+
+	return ret, env, nil
 }
 
 func compileIf(form *persistent.List, env *SymExprsTable) (ast.Expr, *SymExprsTable, error) {

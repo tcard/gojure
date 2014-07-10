@@ -10,17 +10,17 @@ import (
 )
 
 func main() {
-	a, _ := compiler.CompileString(`
+	a, err := compiler.CompileString(`
 
-(println "ab
+(import "fmt")
 
-\tc")
+(fmt/Println "holas")
 
 `)
-	_ = a
-
-	// fmt.Println(err)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
 	// fmt.Printf("%#v\n", a)
 	printer.Fprint(os.Stdout, token.NewFileSet(), a)
-	fmt.Println()
 }
