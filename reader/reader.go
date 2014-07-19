@@ -1,3 +1,4 @@
+// Package reader reads Gojure source code, giving core data structures.
 package reader
 
 import (
@@ -12,34 +13,36 @@ import (
 	"github.com/tcard/gojure/persistent"
 )
 
-func From(r io.Reader) GojureReader {
-	bufr, ok := r.(*bufio.Reader)
+// Returns a GojureReader that reads text from source. If source is a bufio.Reader,
+// it is guaranteed that only what is needed will be consumed from it.
+func From(source io.Reader) GojureReader {
+	bufr, ok := source.(*bufio.Reader)
 	if !ok {
-		bufr = bufio.NewReader(r)
+		bufr = bufio.NewReader(source)
 	}
 	return GojureReader{bufr}
 }
 
+// Returns a GojureReader that reads from a string of text.
 func FromString(s string) GojureReader {
 	return From(strings.NewReader(s))
 }
 
+// A GojureReader is bound to a source of Gojure code in text form.
 type GojureReader struct {
 	*bufio.Reader
 }
 
-func (r GojureReader) ReadByte() (byte, error) {
-	b, err := r.Reader.ReadByte()
-	// fmt.Println("ReadByte", string(b), err)
-	return b, err
-}
-
-func (r GojureReader) UnreadByte() error {
-	err := r.Reader.UnreadByte()
-	// fmt.Println("UnreadByte", err)
-	return err
-}
-
+// Reads the next form and gives its reppresentation in core data structures.
+// Gojure lists will be github.com/tcard/gojure/persistent#List. Vectors will be
+// github.com/tcard/gojure/persistent#Vector. Symbols will be
+// github.com/tcard/gojure/lang#Symbol. Strings will be Go strings, and numbers
+// will be Go ints.
+//
+// No support for maps, sets, keywords, numbers other than ints, etc. is provided
+// at the moment.
+//
+// When the error will be io.EOF.
 func (r GojureReader) Read() (interface{}, error) {
 	c, err := r.skipSpace()
 	if err != nil {
@@ -186,6 +189,7 @@ func (r GojureReader) readSymbol() (lang.Symbol, error) {
 	return ret, nil
 }
 
+// Reads forms separated by whitespace until delim is met.
 func (r GojureReader) readCompound(delim byte) ([]interface{}, error) {
 	ret := []interface{}{}
 	var next interface{}

@@ -186,6 +186,7 @@ var fnAST = &ast.FuncType{
 		{Type: ifaceAST},
 	}}}
 
+// Compile Gojure source coe into a Go AST.
 func Compile(r io.Reader) (*ast.File, error) {
 	gr := reader.From(r)
 
@@ -306,10 +307,13 @@ func Compile(r io.Reader) (*ast.File, error) {
 	return file, nil
 }
 
+// Compile Gojure source coe into a Go AST.
 func CompileString(s string) (*ast.File, error) {
 	return Compile(strings.NewReader(s))
 }
 
+// Compiles a single Gojure form into a Go expression, returning side effects on the symbol
+// table (definitions, etc.) in a new value.
 func CompileForm(form interface{}, env *SymExprsTable) (ast.Expr, *SymExprsTable, error) {
 	switch vform := form.(type) {
 	case int:
@@ -336,26 +340,26 @@ func CompileForm(form interface{}, env *SymExprsTable) (ast.Expr, *SymExprsTable
 		if isSym {
 			switch sym.Name {
 			case "def":
-				return compileDef(vform.Next(), env)
+				return compileDef(vform.Rest(), env)
 			case "fn*":
-				return compileFn(vform.Next(), env)
+				return compileFn(vform.Rest(), env)
 			case "if":
-				return compileIf(vform.Next(), env)
+				return compileIf(vform.Rest(), env)
 			case "quote":
-				if vform.Next() == nil {
+				if vform.Rest() == nil {
 					return CompileForm(nil, env)
 				}
-				q, err := quote(vform.Next().First())
+				q, err := quote(vform.Rest().First())
 				return q, env, err
 			case "import":
-				if vform.Next() == nil {
+				if vform.Rest() == nil {
 					return CompileForm(nil, env)
 				}
 				alias := ""
-				if vform.Next().Next() != nil {
-					alias = vform.Next().Next().First().(lang.Symbol).Name
+				if vform.Rest().Rest() != nil {
+					alias = vform.Rest().Rest().First().(lang.Symbol).Name
 				}
-				err := env.Import(vform.Next().First().(string), alias)
+				err := env.Import(vform.Rest().First().(string), alias)
 				if err != nil {
 					return nil, env, err
 				}
@@ -387,7 +391,7 @@ func compileSymbol(sym lang.Symbol, env *SymExprsTable) (ast.Expr, *SymExprsTabl
 func compileDef(form *persistent.List, env *SymExprsTable) (ast.Expr, *SymExprsTable, error) {
 	ident := form.First().(lang.Symbol).Name
 	env.m[ident] = nil // &ast.BasicLit{Kind: token.STRING, Value: "`placeholder`"}
-	def, env, err := CompileForm(form.Next().First(), env)
+	def, env, err := CompileForm(form.Rest().First(), env)
 	if err != nil {
 		return nil, env, err
 	}
@@ -412,7 +416,7 @@ func compileDef(form *persistent.List, env *SymExprsTable) (ast.Expr, *SymExprsT
 
 func compileFn(form *persistent.List, env *SymExprsTable) (ast.Expr, *SymExprsTable, error) {
 	args := form.First().(*persistent.Vector)
-	bodyf := form.Next().First()
+	bodyf := form.Rest().First()
 	fnEnv := &SymExprsTable{parent: env, m: map[string]ast.Expr{}}
 	for i := 0; i < args.Count(); i++ {
 		fnEnv.m[args.Nth(i).(lang.Symbol).Name] = &ast.IndexExpr{
@@ -473,7 +477,7 @@ func compileCall(form *persistent.List, env *SymExprsTable) (ast.Expr, *SymExprs
 		return nil, env, err
 	}
 	args := []ast.Expr{}
-	for rest := form.Next(); rest != nil; rest = rest.Next() {
+	for rest := form.Rest(); rest != nil; rest = rest.Rest() {
 		arg, env, err := CompileForm(rest.First(), env)
 		if err != nil {
 			return nil, env, err
@@ -496,11 +500,11 @@ func compileIf(form *persistent.List, env *SymExprsTable) (ast.Expr, *SymExprsTa
 	if err != nil {
 		return nil, env, err
 	}
-	yes, env, err := CompileForm(form.Next().First(), env)
+	yes, env, err := CompileForm(form.Rest().First(), env)
 	if err != nil {
 		return nil, env, err
 	}
-	no, env, err := CompileForm(form.Next().Next().First(), env)
+	no, env, err := CompileForm(form.Rest().Rest().First(), env)
 	if err != nil {
 		return nil, env, err
 	}
@@ -630,7 +634,7 @@ func quote(thingy interface{}) (ast.Expr, error) {
 				return nil, err
 			}
 			l.Args = append(l.Args, item)
-			v = v.Next()
+			v = v.Rest()
 		}
 		return l, nil
 	case *persistent.Vector:

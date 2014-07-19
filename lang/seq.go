@@ -8,7 +8,7 @@ import (
 
 type Seq interface {
 	First() interface{}
-	Next() Seq
+	Rest() Seq
 	Cons(x interface{}) Seq
 }
 
@@ -17,7 +17,7 @@ func Count(s Seq) int {
 		return 0
 	}
 	i := 1
-	for s = s.Next(); s != nil; s = s.Next() {
+	for s = s.Rest(); s != nil; s = s.Rest() {
 		i++
 	}
 	return i
@@ -27,27 +27,12 @@ func Format(seq Seq, start string, end string) string {
 	s := start
 	if seq != nil {
 		s += fmt.Sprint(seq.First())
-		for seq = seq.Next(); seq != nil; seq = seq.Next() {
+		for seq = seq.Rest(); seq != nil; seq = seq.Rest() {
 			s += " " + fmt.Sprint(seq.First())
 		}
 	}
 	s += end
 	return s
-}
-
-func Iter(seq Seq) <-chan interface{} {
-	ret := make(chan interface{})
-	go func() {
-		for {
-			if seq == nil {
-				break
-			}
-			ret <- seq.First()
-			seq = seq.Next()
-		}
-		close(ret)
-	}()
-	return ret
 }
 
 type LazySeq struct {
@@ -77,7 +62,7 @@ func (l *LazySeq) First() interface{} {
 	return l.val.first
 }
 
-func (l *LazySeq) Next() Seq {
+func (l *LazySeq) Rest() Seq {
 	l.f()
 	return l.val.rest
 }
@@ -97,7 +82,7 @@ func Take(n int, seq Seq) Seq {
 		return nil
 	}
 	return Lazy(func() (interface{}, Seq) {
-		return seq.First(), Take(n-1, seq.Next())
+		return seq.First(), Take(n-1, seq.Rest())
 	})
 }
 
@@ -106,7 +91,7 @@ func Map(f func(interface{}) interface{}, seq Seq) Seq {
 		return nil
 	}
 	return Lazy(func() (interface{}, Seq) {
-		return f(seq.First()), Map(f, seq.Next())
+		return f(seq.First()), Map(f, seq.Rest())
 	})
 }
 
@@ -124,8 +109,8 @@ func (l *List) First() interface{} {
 	return (*pers.List)(l).First()
 }
 
-func (l *List) Next() Seq {
-	next := (*pers.List)(l).Next()
+func (l *List) Rest() Seq {
+	next := (*pers.List)(l).Rest()
 	if next == nil {
 		return nil
 	}
@@ -167,7 +152,7 @@ func (v *Vector) First() interface{} {
 	return v.Nth(0)
 }
 
-func (v *Vector) Next() Seq {
+func (v *Vector) Rest() Seq {
 	if v.Count() <= 1 {
 		return nil
 	}
