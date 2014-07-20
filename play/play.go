@@ -15,6 +15,8 @@ func main() {
 (import "fmt")
 
 (fmt/Println "holas")
+(fmt/Println '"holas")
+(fmt/Println '(a b c))
 
 `)
 	if err != nil {

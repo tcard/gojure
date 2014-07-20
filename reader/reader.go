@@ -61,6 +61,12 @@ func (r GojureReader) Read() (interface{}, error) {
 			return nil, err
 		}
 		return persistent.NewVector(items...), nil
+	case '\'':
+		quoted, err := r.Read()
+		if err != nil {
+			return nil, err
+		}
+		return persistent.NewList(lang.Symbol{Name: "quote"}, quoted), nil
 	default:
 		r.UnreadByte()
 		return r.readAtom()
@@ -73,31 +79,51 @@ func (r GojureReader) readAtom() (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
+	if c == '+' || c == '-' {
+		sign := c
+		c, err = r.ReadByte()
+		if err != nil && err != io.EOF {
+			return nil, err
+		}
+		r.UnreadByte()
+		if err == io.EOF || !(c >= '0' && c <= '9') {
+			// Symbol '+' or '-'
+			if err == io.EOF {
+				return r.readSymbol()
+			}
+			return r.readSymbolPrepending(sign)
+		} else {
+			ret, err := r.readInt()
+			if sign == '-' {
+				ret = -ret
+			}
+			return ret, err
+		}
+	}
 	r.UnreadByte()
 	switch {
-	case unicode.IsDigit(rune(c)):
+	case c >= '0' && c <= '9':
 		return r.readInt()
 	case c == ':':
 		panic("not yet implemented")
 	case c == '"':
 		return r.readString()
-	default:
-		sym, err := r.readSymbol()
-		if err != nil {
-			return nil, err
-		}
-		if sym.NS == "" {
-			switch sym.Name {
-			case "true":
-				return true, nil
-			case "false":
-				return false, nil
-			case "nil":
-				return nil, nil
-			}
-		}
-		return sym, nil
 	}
+	ret, err := r.readSymbol()
+	if err != nil {
+		return ret, err
+	}
+	if ret.NS == "" {
+		switch ret.Name {
+		case "true":
+			return true, nil
+		case "false":
+			return false, nil
+		case "nil":
+			return nil, nil
+		}
+	}
+	return ret, err
 }
 
 func (r GojureReader) readInt() (int, error) {
@@ -124,6 +150,11 @@ func (r GojureReader) readInt() (int, error) {
 	return strconv.Atoi(string(bys))
 }
 
+var strEscapes = map[string]byte{
+	"n": '\n',
+	"t": '\t',
+}
+
 func (r GojureReader) readString() (string, error) {
 	bys := []byte{}
 	quo, err := r.ReadByte()
@@ -136,14 +167,16 @@ func (r GojureReader) readString() (string, error) {
 	escaping := false
 	c, err := r.ReadByte()
 	for err == nil && (escaping || c != '"') {
-		if c == '\n' {
-			bys = append(bys, '\\', 'n')
-		} else {
-			bys = append(bys, c)
-		}
-		escaping = false
-		if c == '\\' && !escaping {
+		if !escaping && c == '\\' {
 			escaping = true
+		} else {
+			if escaping {
+				if esc, ok := strEscapes[string(c)]; ok {
+					c = esc
+				}
+			}
+			escaping = false
+			bys = append(bys, c)
 		}
 		c, err = r.ReadByte()
 	}
@@ -155,19 +188,25 @@ func (r GojureReader) readString() (string, error) {
 
 func symbolChar(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
-		c == '*' || c == '+' || c == '!' || c == '-' || c == '_' || c == '?' || c == '/' || c == '='
+		c == '*' || c == '+' || c == '!' || c == '-' || c == '_' || c == '?' || c == '/' ||
+		c == '=' || c == '>' || c == '<' || c == '.'
 }
 
 func (r GojureReader) readSymbol() (lang.Symbol, error) {
-	ret := lang.Symbol{}
 	c, err := r.ReadByte()
 	if err != nil {
-		return ret, err
+		return lang.Symbol{}, err
 	}
+	return r.readSymbolPrepending(c)
+}
+
+func (r GojureReader) readSymbolPrepending(c byte) (lang.Symbol, error) {
+	ret := lang.Symbol{}
 	if !symbolChar(c) {
-		return ret, errors.New("bad symbol, starting with rune " + string(c))
+		return ret, errors.New("bad symbol, starting with rune '" + string(c) + "'")
 	}
 	bys := []byte{}
+	var err error
 	for err == nil && symbolChar(c) {
 		if c == '/' {
 			if ret.NS != "" {
@@ -211,7 +250,7 @@ func (r GojureReader) readCompound(delim byte) ([]interface{}, error) {
 
 func (r GojureReader) skipSpace() (byte, error) {
 	c, err := r.ReadByte()
-	for err == nil && unicode.IsSpace(rune(c)) {
+	for err == nil && (unicode.IsSpace(rune(c)) || c == ',') {
 		c, err = r.ReadByte()
 	}
 	return c, err
